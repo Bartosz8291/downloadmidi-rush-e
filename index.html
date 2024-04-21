@@ -1,0 +1,239 @@
+<video src="song2.mp4" controls id="v"></video>
+<canvas id="c"></canvas>
+<script src="midi.js"></script>
+<script>
+/* 
+** IMPORTANT:
+** Once loaded run 'getDeltaY()'
+** to start the process, when done
+** run 'download(exportSongObject(songObject))'
+** also you may want to change
+** some of the variables below depending
+** on the video you use
+*/
+
+//important stuff to change
+var hitThreshold = 0.5;
+var threshold = 30;
+var songStart = 0;
+
+//other crap
+var time = 0;
+var songObject = JSON.parse(JSON.stringify(Array(88).fill([])));;
+var MidiWriter = midiWriteJs;
+var tracks = [];
+var canvas = document.getElementById("c");
+var video = document.getElementById("v");
+var ctx = canvas.getContext("2d");
+function drawVideo(threshold) {
+	canvas.width = video.videoWidth;
+	canvas.height = video.videoHeight;
+	ctx.drawImage(video, 0, 0);
+	var data = ctx.getImageData(0, 0, canvas.width, canvas.height);
+	for (var i = 0; i < data.data.length; i += 4) {
+		data.data[i] = data.data[i] + data.data[i+1] + data.data[i+2] > threshold/100*3*255 ? 255 : 0;
+		data.data[i+1] = data.data[i] + data.data[i+1] + data.data[i+2] > threshold/100*3*255 ? 255 : 0;
+		data.data[i+2] = data.data[i] + data.data[i+1] + data.data[i+2] > threshold/100*3*255 ? 255 : 0;
+	}
+	ctx.putImageData(data, 0, 0);
+}
+function drawOverlay() {
+	var keyWidth = video.videoWidth/52;
+	ctx.fillStyle = "white";
+	for (var i = 0; i < 52; i++) {
+		ctx.globalAlpha = i%2 ? 0.3 : 0.35;
+		ctx.fillRect(i * keyWidth, video.videoHeight/4, keyWidth, 100);
+	}
+	var offsets = [
+		0.25,
+		false,
+		-0.2,
+		0.2,
+		false,
+		-0.25,
+		0,
+	];
+	ctx.fillStyle = "black";
+	for (var i = 0; i < 52; i++) {
+		if (offsets[i%7] !== false && i+1 != 52) {
+			ctx.fillRect((i * keyWidth) + keyWidth/2 + (offsets[i%7] * keyWidth/2) + keyWidth/6, video.videoHeight/4, keyWidth/1.5, 50);
+		}
+	}
+}
+function drawOverlayHits(offset) {
+	var keyboard = [];
+	var data = ctx.getImageData(0, video.videoHeight/4-1-offset, video.videoWidth, 1);
+	var keyWidth = video.videoWidth/52;
+	ctx.fillStyle = "red";
+	ctx.globalAlpha = 1;
+	for (var i = 0; i < 52; i++) {
+		if (check(i * keyWidth, keyWidth, data) > hitThreshold) {
+			ctx.fillRect(i * keyWidth, video.videoHeight/4, keyWidth, 100);
+			keyboard[Math.floor(12/7*(i-1))+2] = true;
+		} else {
+			keyboard[Math.floor(12/7*(i-1))+2] = false;
+		}
+	}
+	var offsets = [
+		0.15,
+		false,
+		-0.1,
+		0.1,
+		false,
+		-0.15,
+		0,
+	];
+	for (var i = 0; i < 52; i++) {
+		if (offsets[i%7] !== false && i+1 != 52) {
+			if (check((i * keyWidth) + keyWidth/2 + (offsets[i%7] * keyWidth/2) + keyWidth/6, keyWidth/1.5, data) > hitThreshold) {
+				ctx.fillRect((i * keyWidth) + keyWidth/2 + (offsets[i%7] * keyWidth/2) + keyWidth/6, video.videoHeight/4, keyWidth/1.5, 50);
+				keyboard[Math.floor(12/7*(i-1))+3] = true;
+			} else {
+				keyboard[Math.floor(12/7*(i-1))+3] = false;
+			}
+		}
+	}
+	return keyboard;
+}
+function check(start, end, data) {
+	start = ~~start;
+	end = ~~end;
+	end = start + end;
+	var t = 0;
+	for (var i = start; i < end; i++) {
+		if (data.data[i*4] > 0) t++;
+	}
+	return t/(end-start);
+}
+function keyDiff(keys, pKeys) {
+	for (var i = 0; i < keys.length; i++) {
+		if (JSON.stringify(keys[i]) != JSON.stringify(pKeys[i])) songObject[i].push(time);
+	}
+}
+var keys = Array(88).fill(false);
+function exportSongObject(songObject) {
+	timeStretch = 8;
+	tracks = [];
+	for (var i = 0; i < 88; i++) {
+		tracks.push(new MidiWriter.Track());
+		tracks[i].addEvent(new MidiWriter.ProgramChangeEvent({instrument: 1}));
+	}
+	for (var i = 0; i < 88; i++) {
+		for (var j = 0; j < songObject[i].length; j += 2) {
+			var note = new MidiWriter.NoteEvent({
+				pitch: i + 24 - 3,
+				duration: "T" + (timeStretch*(songObject[i][j+1]-songObject[i][j])),
+				wait: "T" + (timeStretch*(songObject[i][j] - (songObject[i][j-1]?songObject[i][j-1]:0)))
+			});
+			tracks[i].addEvent(note);
+		}
+	}
+	var write = new MidiWriter.Writer(tracks);
+	return write.dataUri();
+}
+function draw() {
+	drawVideo(threshold);
+	drawOverlay();
+	for (var i = 0; i < deltaY; i++) {
+		var pKeys = JSON.parse(JSON.stringify(keys));
+		keys = drawOverlayHits(i);
+		keyDiff(keys, pKeys);
+		time += 1/deltaY;
+	}
+	if (video.currentTime < video.duration) {
+		video.currentTime += 1/30
+    }
+}
+function getNoteBounds(note) {
+	var keyWidth = video.videoWidth/52;
+	var offsets = [
+		0.15,
+		false,
+		-0.1,
+		0.1,
+		false,
+		-0.15,
+		0,
+	];
+	var j = 0;
+	var k = -1;
+	for (var i = 0; i < note; i++) {
+		if (j%1 == 0) k++;
+		if (offsets[k%7] !== false) {
+			j += 0.5;
+		} else {
+			j = ~~j+1;
+		}
+	}
+	if (j%1 == 0) {
+		return [j*keyWidth, (j+1)*keyWidth];
+	} else {
+		return [(j * keyWidth) + (offsets[~~(j%7)] * keyWidth/2) + keyWidth/6, (j * keyWidth) + (offsets[~~(j%7)] * keyWidth/2) + keyWidth/6 + keyWidth/1.5]
+	}
+}
+var deltaY;
+function getDeltaY() {
+	var n = Array(88).fill(false);
+	video.ontimeupdate = function() {
+		drawVideo(threshold);
+		n = drawOverlayHits(0);
+		video.currentTime += 1/30;
+		if (JSON.stringify(n) != JSON.stringify(Array(88).fill(false))) {
+			var note;
+			for (var i = 0; i < n.length; i++) {
+				if (n[i]) {
+					note = i;
+					break;
+				}
+			}
+			var o = 0;
+			drawVideo(threshold);
+			var data = ctx.getImageData(0, video.videoHeight/4-1, video.videoWidth, 1);
+			while (check(getNoteBounds(note)[0], getNoteBounds(note)[1]-getNoteBounds(note)[0], data) > hitThreshold) {
+				data = ctx.getImageData(0, video.videoHeight/4-1+o, video.videoWidth, 1);
+				o++;
+			}
+			ctx.fillStyle = "orange"
+			ctx.fillRect(0, video.videoHeight/4-1+o, canvas.width, 1);
+			ctx.fillStyle = "cyan"
+			ctx.fillRect(0, video.videoHeight/4-1, canvas.width, 1);
+			var offset1 = o;
+			var offset2;
+			console.log(offset1);
+			video.ontimeupdate = function() {
+				var o = offset1;
+				drawVideo(threshold);
+				var data = ctx.getImageData(0, video.videoHeight/4-1+o, video.videoWidth, 1);
+				while (check(getNoteBounds(note)[0], getNoteBounds(note)[1]-getNoteBounds(note)[0], data) <= hitThreshold) {
+					data = ctx.getImageData(0, video.videoHeight/4-1+o, video.videoWidth, 1);
+					o--;
+				}
+				ctx.fillStyle = "orange"
+				ctx.fillRect(0, video.videoHeight/4-1+o, canvas.width, 1);
+				ctx.fillStyle = "magenta"
+				ctx.fillRect(0, video.videoHeight/4-1+offset1, canvas.width, 1);
+				ctx.fillStyle = "cyan"
+				ctx.fillRect(0, video.videoHeight/4-1, canvas.width, 1);
+				var offset2 = o;
+				console.log(offset2);
+				video.ontimeupdate = null;
+				deltaY = offset1-offset2;
+				deltaY /= 2;
+				deltaY = ~~deltaY;
+				video.currentTime = songStart;
+				video.ontimeupdate = draw;
+				drawVideo();
+			}
+			video.currentTime -= 1/30 + 1/30;
+		}
+	};
+	video.currentTime = video.duration/2;
+}
+function download(link) {
+	var a = document.createElement("a");
+	a.href = link;
+	a.download = "Song.midi";
+	a.click();
+}
+video.ontimeupdate = draw;
+</script>
